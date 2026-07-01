@@ -38,6 +38,9 @@ app.use(express.urlencoded({ extended: true }));
 const experiencesRoutes = require('./src/routes/experiences.routes');
 app.use('/api/experiences', experiencesRoutes);
 
+const companiesRoutes = require("./src/routes/companies.routes");
+app.use("/api/companies", companiesRoutes);
+
 // ─── Health check route ───────────────────────────────
 // this is a simple route to verify the server is running
 // hit GET /health in Postman and you should get {"status":"ok"}
