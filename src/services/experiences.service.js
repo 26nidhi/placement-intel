@@ -122,6 +122,11 @@ async function submitExperience(data) {
       // This uses the UNIQUE constraint we set up in Module 2.
     }
   }
+  // invalidate the cached pattern for this company
+  // so next request gets fresh aggregated data
+  const { invalidateCompanyCache } = require("./companies.service");
+  const companySlug = createSlug(company);
+  await invalidateCompanyCache(companySlug);
 
   return { id: experienceId, company, title };
 }

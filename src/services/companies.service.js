@@ -1,30 +1,54 @@
 // src/services/companies.service.js
 
 const pool = require("../config/db");
+const redis = require("../config/redis");
+
+// How long to keep cached data before it expires
+// 3600 seconds = 1 hour
+// After 1 hour Redis automatically deletes the cached result
+// and the next request recalculates from PostgreSQL
+const CACHE_TTL = 3600;
 
 // ─────────────────────────────────────────────────────
 // Get aggregated pattern summary for a company
-// This is the main query that makes this project impressive.
-// It answers: "What does Amazon usually ask?"
+// WITH Redis caching — checks cache first, hits DB only if needed
 
 async function getCompanyPattern(slug, filters = {}) {
   const { year } = filters;
 
-  // Step 1 — find the company by slug
+  // Build a unique cache key for this specific request
+  // "pattern:amazon:2024" and "pattern:amazon:all" are different
+  // cached results — we never mix them up
+  const cacheKey = `pattern:${slug}:${year || "all"}`;
+
+  // Step 1 — check Redis first
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      console.log(`Cache HIT for ${cacheKey}`);
+      // JSON.parse because Redis stores strings, not objects
+      return JSON.parse(cached);
+    }
+    console.log(`Cache MISS for ${cacheKey}`);
+  } catch (redisErr) {
+    // if Redis fails, log it but keep going
+    // we fall through to PostgreSQL automatically
+    // this is "graceful degradation" — Redis down doesn't crash the app
+    console.error("Redis error, falling back to DB:", redisErr.message);
+  }
+
+  // Step 2 — Redis had nothing, query PostgreSQL
   const companyResult = await pool.query(
     "SELECT id, name, slug FROM companies WHERE slug = $1",
     [slug],
   );
 
   if (companyResult.rows.length === 0) {
-    return null; // company not found
+    return null;
   }
 
   const company = companyResult.rows[0];
 
-  // Step 2 — build year filter dynamically
-  // If user passed ?year=2024, we add that to the WHERE clause
-  // If not, we query all years
   let yearFilter = "";
   let queryParams = [company.id];
 
@@ -33,7 +57,6 @@ async function getCompanyPattern(slug, filters = {}) {
     queryParams.push(year);
   }
 
-  // Step 3 — count total experiences for this company
   const totalResult = await pool.query(
     `SELECT COUNT(*) as total 
      FROM experiences e 
@@ -43,19 +66,11 @@ async function getCompanyPattern(slug, filters = {}) {
 
   const totalExperiences = parseInt(totalResult.rows[0].total);
 
-  // If we have less than 10 experiences, warn the user
-  // that patterns may not be reliable
   const confidence =
     totalExperiences >= 10 ? "High"
     : totalExperiences >= 5 ? "Medium"
     : "Low";
 
-  // Step 4 — get top topics with frequency
-  // This query:
-  // 1. JOINs experiences → experience_topics → topics
-  // 2. Counts how many experiences mention each topic
-  // 3. Calculates percentage: (count / total) * 100
-  // 4. Orders by frequency descending
   const topicsResult = await pool.query(
     `SELECT 
        t.name as topic,
@@ -73,7 +88,6 @@ async function getCompanyPattern(slug, filters = {}) {
     [company.id, totalExperiences, ...(year ? [year] : [])],
   );
 
-  // Step 5 — get average rounds
   const roundsResult = await pool.query(
     `SELECT ROUND(AVG(total_rounds)) as avg_rounds
      FROM experiences e
@@ -82,8 +96,6 @@ async function getCompanyPattern(slug, filters = {}) {
     queryParams,
   );
 
-  // Step 6 — get result breakdown
-  // How many got selected vs rejected
   const resultsResult = await pool.query(
     `SELECT result, COUNT(*) as count
      FROM experiences e
@@ -92,20 +104,16 @@ async function getCompanyPattern(slug, filters = {}) {
     queryParams,
   );
 
-  // Convert result rows into a clean object
-  // { selected: 5, rejected: 3, unknown: 2 }
   const resultBreakdown = {};
   for (const row of resultsResult.rows) {
     resultBreakdown[row.result] = parseInt(row.count);
   }
 
-  // Step 7 — assemble the final response
-  return {
+  const pattern = {
     company: company.name,
     slug: company.slug,
     based_on: totalExperiences,
     confidence,
-    // show warning if data is too thin to trust
     warning:
       totalExperiences < 10 ?
         `Only ${totalExperiences} experience(s) found. Patterns may not be reliable.`
@@ -122,13 +130,52 @@ async function getCompanyPattern(slug, filters = {}) {
     results: resultBreakdown,
     filters_applied: { year: year || "all" },
   };
+
+  // Step 3 — save result in Redis for next time
+  // JSON.stringify because Redis only stores strings
+  try {
+    await redis.set(cacheKey, JSON.stringify(pattern), "EX", CACHE_TTL);
+    console.log(`Cached ${cacheKey} for ${CACHE_TTL} seconds`);
+  } catch (redisErr) {
+    // if caching fails, it's not critical — just log and move on
+    console.error("Failed to cache result:", redisErr.message);
+  }
+
+  return pattern;
 }
 
 // ─────────────────────────────────────────────────────
-// Get list of all companies we have data for
-// Useful for a "browse all companies" endpoint
+// Invalidate cache for a company
+// Called whenever a new experience is submitted for that company
+// so the next request gets fresh data from PostgreSQL
+
+async function invalidateCompanyCache(slug) {
+  try {
+    // Delete all cached patterns for this company
+    // both "all years" and any specific year caches
+    const keys = await redis.keys(`pattern:${slug}:*`);
+    if (keys.length > 0) {
+      await redis.del(...keys);
+      console.log(`Cache invalidated for ${slug}`);
+    }
+  } catch (redisErr) {
+    console.error("Failed to invalidate cache:", redisErr.message);
+  }
+}
+
+// ─────────────────────────────────────────────────────
+// Get list of all companies — with caching
 
 async function getAllCompanies() {
+  const cacheKey = "companies:all";
+
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) return JSON.parse(cached);
+  } catch (err) {
+    console.error("Redis error:", err.message);
+  }
+
   const result = await pool.query(
     `SELECT 
        c.name,
@@ -140,22 +187,29 @@ async function getAllCompanies() {
      ORDER BY total_experiences DESC`,
   );
 
-  return result.rows.map((row) => ({
+  const companies = result.rows.map((row) => ({
     name: row.name,
     slug: row.slug,
     total_experiences: parseInt(row.total_experiences),
   }));
+
+  try {
+    await redis.set(cacheKey, JSON.stringify(companies), "EX", CACHE_TTL);
+  } catch (err) {
+    console.error("Failed to cache:", err.message);
+  }
+
+  return companies;
 }
 
 // ─────────────────────────────────────────────────────
-// Get individual experiences list for a company
-// With filters: year, result, page
+// Get individual experiences list — no caching needed
+// because this changes frequently and supports many filter combos
 
 async function getCompanyExperiences(slug, filters = {}) {
   const { year, result, page = 1, limit = 10 } = filters;
   const offset = (page - 1) * limit;
 
-  // find company first
   const companyResult = await pool.query(
     "SELECT id, name FROM companies WHERE slug = $1",
     [slug],
@@ -165,7 +219,6 @@ async function getCompanyExperiences(slug, filters = {}) {
 
   const company = companyResult.rows[0];
 
-  // build dynamic filters
   let conditions = ["e.company_id = $1"];
   let params = [company.id];
   let paramCount = 1;
@@ -196,7 +249,6 @@ async function getCompanyExperiences(slug, filters = {}) {
     [...params, limit, offset],
   );
 
-  // for each experience, also get its topics
   const experiences = [];
   for (const exp of experiencesResult.rows) {
     const topicsResult = await pool.query(
@@ -224,4 +276,5 @@ module.exports = {
   getCompanyPattern,
   getAllCompanies,
   getCompanyExperiences,
+  invalidateCompanyCache,
 };
