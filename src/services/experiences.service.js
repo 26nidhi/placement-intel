@@ -67,40 +67,44 @@ async function findOrCreateTopic(topicName) {
 // Main function — saves a complete interview experience
 // submitted by a student, along with its topics.
 async function submitExperience(data) {
-  const {
-    company, // "Amazon"
-    title, // "Amazon SDE-1 Interview Aug 2024"
+const {
+  company,
+  title,
+  year,
+  totalRounds,
+  result,
+  ctc,
+  processDuration,
+  rawText,
+  tips,
+  topics,
+  source = "manual", // default to manual if not provided
+  sourceUrl = null, // default to null if not provided
+} = data;
+
+// Step 1 — find or create the company, get its id
+const companyId = await findOrCreateCompany(company);
+
+// Step 2 — insert the experience itself
+const experienceResult = await pool.query(
+  `INSERT INTO experiences 
+      (company_id, title, source, source_url, year, total_rounds, result, ctc, process_duration, raw_text, tips)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     RETURNING id`,
+  [
+    companyId,
+    title,
+    source,
+    sourceUrl,
     year,
     totalRounds,
-    result, // "selected" | "rejected" | "unknown"
+    result,
     ctc,
     processDuration,
     rawText,
     tips,
-    topics, // ["Dynamic Programming", "Trees", "Arrays"]
-  } = data;
-
-  // Step 1 — find or create the company, get its id
-  const companyId = await findOrCreateCompany(company);
-
-  // Step 2 — insert the experience itself
-  const experienceResult = await pool.query(
-    `INSERT INTO experiences 
-      (company_id, title, source, year, total_rounds, result, ctc, process_duration, raw_text, tips)
-     VALUES ($1, $2, 'manual', $3, $4, $5, $6, $7, $8, $9)
-     RETURNING id`,
-    [
-      companyId,
-      title,
-      year,
-      totalRounds,
-      result,
-      ctc,
-      processDuration,
-      rawText,
-      tips,
-    ],
-  );
+  ],
+);
 
   const experienceId = experienceResult.rows[0].id;
 
