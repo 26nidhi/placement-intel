@@ -44,11 +44,35 @@ function extractRoundCount(text) {
 
   const lowerText = text.toLowerCase();
 
-  // Match patterns like "3 rounds", "4 rounds", "had 5 rounds"
-  const numberMatch = lowerText.match(/(\d+)\s*rounds?/);
+  // Match "x rounds" or "x round" where x is 1-9 only
+  // This prevents matching "1015" or other large numbers
+  const numberMatch = lowerText.match(/\b([1-9])\s*rounds?\b/);
   if (numberMatch) {
-    return parseInt(numberMatch[1]);
+    const num = parseInt(numberMatch[1]);
+    // sanity check — interviews never have more than 10 rounds
+    if (num <= 10) return num;
   }
+
+  // Match written numbers
+  const writtenNumbers = {
+    one: 1,
+    two: 2,
+    three: 3,
+    four: 4,
+    five: 5,
+    six: 6,
+    seven: 7,
+    eight: 8,
+  };
+
+  for (const [word, num] of Object.entries(writtenNumbers)) {
+    if (lowerText.includes(`${word} round`)) {
+      return num;
+    }
+  }
+
+  return null;
+}
 
   // Match written numbers — "three rounds", "four rounds"
   const writtenNumbers = {
@@ -69,7 +93,7 @@ function extractRoundCount(text) {
   }
 
   return null; // couldn't find round count
-}
+
 
 // Third function — extracts CTC from text
 // Looks for patterns like "18 LPA", "22lpa", "offered 30 LPA"
