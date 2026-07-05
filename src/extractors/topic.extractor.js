@@ -3,57 +3,40 @@
 const TOPICS_MAP = require("../config/topics.map");
 
 // Main function — takes raw text, returns array of matched topic names
-// Example:
-//   Input:  "they asked me to find shortest path and reverse a linked list"
-//   Output: ["Graphs", "Linked List"]
-
 function extractTopics(text) {
   if (!text || typeof text !== "string") {
-    return []; // if no text given, return empty array
+    return [];
   }
 
-  // lowercase everything so "BFS" and "bfs" both match
   const lowerText = text.toLowerCase();
-
   const matchedTopics = new Set();
-  // We use a Set instead of an array because the same topic
-  // might match multiple keywords — e.g. "bfs" and "shortest path"
-  // both map to "Graphs". A Set automatically removes duplicates.
 
-  // Loop through every topic in our map
   for (const [topicName, keywords] of Object.entries(TOPICS_MAP)) {
-    // Loop through every keyword for this topic
     for (const keyword of keywords) {
-      // Check if this keyword exists anywhere in the text
       if (lowerText.includes(keyword)) {
-        matchedTopics.add(topicName); // add topic to results
-        break; // no need to check other keywords for this topic
-        // once we found one match, the topic is confirmed
+        matchedTopics.add(topicName);
+        break;
       }
     }
   }
 
-  // Convert Set back to Array before returning
   return Array.from(matchedTopics);
 }
 
-// Secondary function — extracts number of rounds from text
-// Looks for patterns like "3 rounds", "4 rounds", "five rounds"
+// Extracts number of rounds from text
 function extractRoundCount(text) {
   if (!text || typeof text !== "string") return null;
 
   const lowerText = text.toLowerCase();
 
-  // Match "x rounds" or "x round" where x is 1-9 only
-  // This prevents matching "1015" or other large numbers
+  // match single digit round counts only — prevents year being picked up
   const numberMatch = lowerText.match(/\b([1-9])\s*rounds?\b/);
   if (numberMatch) {
     const num = parseInt(numberMatch[1]);
-    // sanity check — interviews never have more than 10 rounds
     if (num <= 10) return num;
   }
 
-  // Match written numbers
+  // match written numbers
   const writtenNumbers = {
     one: 1,
     two: 2,
@@ -74,33 +57,10 @@ function extractRoundCount(text) {
   return null;
 }
 
-  // Match written numbers — "three rounds", "four rounds"
-  const writtenNumbers = {
-    one: 1,
-    two: 2,
-    three: 3,
-    four: 4,
-    five: 5,
-    six: 6,
-    seven: 7,
-    eight: 8,
-  };
-
-  for (const [word, num] of Object.entries(writtenNumbers)) {
-    if (lowerText.includes(`${word} round`)) {
-      return num;
-    }
-  }
-
-  return null; // couldn't find round count
-
-
-// Third function — extracts CTC from text
-// Looks for patterns like "18 LPA", "22lpa", "offered 30 LPA"
+// Extracts CTC from text
 function extractCTC(text) {
   if (!text || typeof text !== "string") return null;
 
-  // Match patterns like "22 LPA", "18LPA", "22.5 LPA"
   const ctcMatch = text.match(/(\d+\.?\d*)\s*lpa/i);
   if (ctcMatch) {
     return `${ctcMatch[1]} LPA`;
@@ -109,8 +69,7 @@ function extractCTC(text) {
   return null;
 }
 
-// Fourth function — extracts result from text
-// Looks for "selected", "rejected", "offered" etc.
+// Extracts result from text
 function extractResult(text) {
   if (!text || typeof text !== "string") return "unknown";
 
@@ -140,7 +99,6 @@ function extractResult(text) {
   return "unknown";
 }
 
-// Export all 4 functions so other files can use them
 module.exports = {
   extractTopics,
   extractRoundCount,
